@@ -25,7 +25,7 @@ export default async function handleToken(
       return;
     }
 
-    const roomName = `room-${generateRandomAlphanumeric(4)}-${generateRandomAlphanumeric(4)}`;
+    const roomName = "dev";
     const identity = `identity-${generateRandomAlphanumeric(4)}`
 
     const grant: VideoGrant = {
@@ -34,6 +34,7 @@ export default async function handleToken(
       canPublish: true,
       canPublishData: true,
       canSubscribe: true,
+      canUpdateOwnMetadata: true,
     };
 
     const token = await createToken({ identity }, grant);

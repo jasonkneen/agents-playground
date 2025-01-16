@@ -63,9 +63,14 @@ const useAppConfig = (): AppConfig => {
   return useMemo(() => {
     if (process.env.NEXT_PUBLIC_APP_CONFIG) {
       try {
-        const parsedConfig = jsYaml.load(
-          process.env.NEXT_PUBLIC_APP_CONFIG
-        ) as AppConfig;
+        let parsedConfig: AppConfig;
+        try {
+          // First try parsing as JSON
+          parsedConfig = JSON.parse(process.env.NEXT_PUBLIC_APP_CONFIG);
+        } catch {
+          // If JSON parsing fails, try YAML
+          parsedConfig = jsYaml.load(process.env.NEXT_PUBLIC_APP_CONFIG) as AppConfig;
+        }
         if (parsedConfig.settings === undefined) {
           parsedConfig.settings = defaultConfig.settings;
         }

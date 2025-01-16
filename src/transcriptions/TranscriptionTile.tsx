@@ -1,4 +1,5 @@
 import { ChatMessageType, ChatTile } from "@/components/chat/ChatTile";
+import { VoiceAssistantInstance } from "@/hooks/useMultiVoiceAssistant";
 import {
   TrackReferenceOrPlaceholder,
   useChat,
@@ -7,20 +8,19 @@ import {
 } from "@livekit/components-react";
 import {
   LocalParticipant,
-  Participant,
   Track,
-  TranscriptionSegment,
 } from "livekit-client";
 import { useEffect, useState } from "react";
 
+const MAX_AGENTS = 4; // Maximum number of supported agents
+
 export function TranscriptionTile({
-  agentAudioTrack,
-  accentColor,
+  voiceAssistants,
+  defaultAccentColor,
 }: {
-  agentAudioTrack: TrackReferenceOrPlaceholder;
-  accentColor: string;
+  voiceAssistants: VoiceAssistantInstance[];
+  defaultAccentColor: string;
 }) {
-  const agentMessages = useTrackTranscription(agentAudioTrack);
   const localParticipant = useLocalParticipant();
   const localMessages = useTrackTranscription({
     publication: localParticipant.microphoneTrack,
@@ -28,84 +28,80 @@ export function TranscriptionTile({
     participant: localParticipant.localParticipant,
   });
 
-  const [transcripts, setTranscripts] = useState<Map<string, ChatMessageType>>(
-    new Map()
-  );
+  // Create fixed number of transcription hooks
+  const transcriptionHooks = [
+    useTrackTranscription(voiceAssistants[0]?.audioTrack),
+    useTrackTranscription(voiceAssistants[1]?.audioTrack),
+    useTrackTranscription(voiceAssistants[2]?.audioTrack),
+    useTrackTranscription(voiceAssistants[3]?.audioTrack),
+  ];
+
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const { chatMessages, send: sendChat } = useChat();
 
-  // store transcripts
   useEffect(() => {
-    agentMessages.segments.forEach((s) =>
-      transcripts.set(
-        s.id,
-        segmentToChatMessage(
-          s,
-          transcripts.get(s.id),
-          agentAudioTrack.participant
-        )
-      )
-    );
-    localMessages.segments.forEach((s) =>
-      transcripts.set(
-        s.id,
-        segmentToChatMessage(
-          s,
-          transcripts.get(s.id),
-          localParticipant.localParticipant
-        )
-      )
-    );
+    const allMessages: ChatMessageType[] = [];
 
-    const allMessages = Array.from(transcripts.values());
-    for (const msg of chatMessages) {
-      const isAgent =
-        msg.from?.identity === agentAudioTrack.participant?.identity;
+    // Add local participant messages
+    localMessages.segments.forEach((segment) => {
+      allMessages.push({
+        name: "You",
+        message: segment.final ? segment.text : `${segment.text} ...`,
+        timestamp: Date.now(),
+        isSelf: true,
+      });
+    });
+
+    // Add agent messages
+    voiceAssistants.forEach((assistant, index) => {
+      if (index < MAX_AGENTS && assistant.audioTrack) {
+        const transcription = transcriptionHooks[index];
+        transcription.segments.forEach((segment) => {
+          allMessages.push({
+            name: assistant.name,
+            message: segment.final ? segment.text : `${segment.text} ...`,
+            timestamp: Date.now(),
+            isSelf: false,
+          });
+        });
+      }
+    });
+
+    // Add chat messages
+    chatMessages.forEach((msg) => {
+      const assistant = voiceAssistants.find(
+        (a) => a.agent?.identity === msg.from?.identity
+      );
       const isSelf =
         msg.from?.identity === localParticipant.localParticipant.identity;
-      let name = msg.from?.name;
-      if (!name) {
-        if (isAgent) {
-          name = "Agent";
-        } else if (isSelf) {
-          name = "You";
-        } else {
-          name = "Unknown";
-        }
-      }
+      
+      const name = msg.from?.name || (assistant ? assistant.name : (isSelf ? "You" : "Unknown"));
+      
       allMessages.push({
         name,
         message: msg.message,
         timestamp: msg.timestamp,
-        isSelf: isSelf,
+        isSelf,
       });
-    }
+    });
+
+    // Sort messages by timestamp
     allMessages.sort((a, b) => a.timestamp - b.timestamp);
     setMessages(allMessages);
   }, [
-    transcripts,
-    chatMessages,
-    localParticipant.localParticipant,
-    agentAudioTrack.participant,
-    agentMessages.segments,
     localMessages.segments,
+    transcriptionHooks,
+    chatMessages,
+    voiceAssistants,
+    localParticipant.localParticipant.identity,
+    defaultAccentColor,
   ]);
 
   return (
-    <ChatTile messages={messages} accentColor={accentColor} onSend={sendChat} />
+    <ChatTile 
+      messages={messages} 
+      accentColor={defaultAccentColor} 
+      onSend={sendChat} 
+    />
   );
-}
-
-function segmentToChatMessage(
-  s: TranscriptionSegment,
-  existingMessage: ChatMessageType | undefined,
-  participant: Participant
-): ChatMessageType {
-  const msg: ChatMessageType = {
-    message: s.final ? s.text : `${s.text} ...`,
-    name: participant instanceof LocalParticipant ? "You" : "Agent",
-    isSelf: participant instanceof LocalParticipant,
-    timestamp: existingMessage?.timestamp ?? Date.now(),
-  };
-  return msg;
 }

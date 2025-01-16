@@ -2,11 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --theme-color: '';
+  --theme-bg: '';
+  --theme-text: '';
+  --theme-border: '';
+}
+
 body {
   background: black;
   --lk-va-bar-gap: 4px;
   --lk-va-bar-width: 4px;
   --lk-va-border-radius: 2px;
+}
+
+[data-theme-color] {
+  --theme-color: var(--tw-color-current);
+  --theme-bg: var(--tw-bg-opacity);
+  --theme-text: var(--tw-text-opacity);
+  --theme-border: var(--tw-border-opacity);
 }
 
 #__next {

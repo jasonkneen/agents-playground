@@ -32,17 +32,20 @@ for (const [name, color] of Object.entries(customColors)) {
 }
 
 const safelist = [
-  'bg-black',
-  'bg-white',
-  'transparent',
-  'object-cover',
-  'object-contain',
+  "bg-black",
+  "bg-white",
+  "transparent",
+  "object-cover",
+  "object-contain",
+  "hidden",
+  "flex",
   ...shadowNames,
   ...textShadowNames,
-  ...shades.flatMap(shade => [
-    ...colorList.flatMap(color => [
-      ...uiElements.flatMap(element => [
+  ...shades.flatMap((shade) => [
+    ...colorList.flatMap((color) => [
+      ...uiElements.flatMap((element) => [
         `${element}-${color}-${shade}`,
+        `lg:${element}-${color}-${shade}`,
       ]),
     ]),
   ]),

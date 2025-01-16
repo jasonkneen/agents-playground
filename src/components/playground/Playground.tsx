@@ -22,8 +22,9 @@ import {
   useLocalParticipant,
   useRoomInfo,
   useTracks,
-  useVoiceAssistant,
 } from "@livekit/components-react";
+import { DataPacket_Kind } from "livekit-client";
+import { useMultiVoiceAssistant, updateAgentColor } from "@/hooks/useMultiVoiceAssistant";
 import { ConnectionState, LocalParticipant, Track } from "livekit-client";
 import { QRCodeSVG } from "qrcode.react";
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
@@ -51,9 +52,7 @@ export default function Playground({
   const { name } = useRoomInfo();
   const [transcripts, setTranscripts] = useState<ChatMessageType[]>([]);
   const { localParticipant } = useLocalParticipant();
-
-  const voiceAssistant = useVoiceAssistant();
-
+  const { voiceAssistants, count: agentCount } = useMultiVoiceAssistant();
   const roomState = useConnectionState();
   const tracks = useTracks();
 
@@ -64,10 +63,11 @@ export default function Playground({
     }
   }, [config, localParticipant, roomState]);
 
+  // Get video track from the first agent that has one
   const agentVideoTrack = tracks.find(
     (trackRef) =>
       trackRef.publication.kind === Track.Kind.Video &&
-      trackRef.participant.isAgent
+      voiceAssistants.some(va => va.agent?.identity === trackRef.participant.identity)
   );
 
   const localTracks = tracks.filter(
@@ -80,29 +80,25 @@ export default function Playground({
     ({ source }) => source === Track.Source.Microphone
   );
 
-  const onDataReceived = useCallback(
-    (msg: any) => {
-      if (msg.topic === "transcription") {
-        const decoded = JSON.parse(
-          new TextDecoder("utf-8").decode(msg.payload)
-        );
+  const onDataReceived = useCallback((msg: { payload: Uint8Array }) => {
+    try {
+      const decoded = JSON.parse(new TextDecoder().decode(msg.payload));
+      if (decoded.type === "transcription") {
         let timestamp = new Date().getTime();
         if ("timestamp" in decoded && decoded.timestamp > 0) {
           timestamp = decoded.timestamp;
         }
-        setTranscripts([
-          ...transcripts,
-          {
-            name: "You",
-            message: decoded.text,
-            timestamp: timestamp,
-            isSelf: true,
-          },
-        ]);
+        setTranscripts(prev => [...prev, {
+          name: "Participant",
+          message: decoded.text,
+          timestamp: timestamp,
+          isSelf: true,
+        }]);
       }
-    },
-    [transcripts]
-  );
+    } catch (error) {
+      console.error('Error processing data channel message:', error);
+    }
+  }, []);
 
   useDataChannel(onDataReceived);
 
@@ -172,15 +168,25 @@ export default function Playground({
     );
 
     const visualizerContent = (
-      <div
-        className={`flex items-center justify-center w-full h-48 [--lk-va-bar-width:30px] [--lk-va-bar-gap:20px] [--lk-fg:var(--lk-theme-color)]`}
-      >
-        <BarVisualizer
-          state={voiceAssistant.state}
-          trackRef={voiceAssistant.audioTrack}
-          barCount={5}
-          options={{ minHeight: 20 }}
-        />
+      <div className="flex flex-col gap-4 w-full">
+        {voiceAssistants.map((assistant) => (
+          assistant.audioTrack && (
+            <div key={assistant.id} className="flex flex-col gap-2">
+              <div className="text-sm text-gray-500">{assistant.name}</div>
+              <div
+                className={`flex items-center justify-center w-full h-24 [--lk-va-bar-width:30px] [--lk-va-bar-gap:20px]`}
+                style={{ '--lk-fg': assistant.color || 'var(--lk-theme-color)' } as React.CSSProperties}
+              >
+                <BarVisualizer
+                  state={assistant.state}
+                  trackRef={assistant.audioTrack}
+                  barCount={5}
+                  options={{ minHeight: 20 }}
+                />
+              </div>
+            </div>
+          )
+        ))}
       </div>
     );
 
@@ -188,29 +194,28 @@ export default function Playground({
       return disconnectedContent;
     }
 
-    if (!voiceAssistant.audioTrack) {
+    if (voiceAssistants.length === 0 || !voiceAssistants.some(a => a.audioTrack)) {
       return waitingContent;
     }
 
     return visualizerContent;
   }, [
-    voiceAssistant.audioTrack,
+    voiceAssistants,
     config.settings.theme_color,
-    roomState,
-    voiceAssistant.state,
+    roomState
   ]);
 
   const chatTileContent = useMemo(() => {
-    if (voiceAssistant.audioTrack) {
+    if (voiceAssistants.length > 0) {
       return (
         <TranscriptionTile
-          agentAudioTrack={voiceAssistant.audioTrack}
-          accentColor={config.settings.theme_color}
+          voiceAssistants={voiceAssistants}
+          defaultAccentColor={config.settings.theme_color}
         />
       );
     }
     return <></>;
-  }, [config.settings.theme_color, voiceAssistant.audioTrack]);
+  }, [config.settings.theme_color, voiceAssistants]);
 
   const settingsTileContent = useMemo(() => {
     return (
@@ -230,7 +235,7 @@ export default function Playground({
                 valueColor={`${config.settings.theme_color}-500`}
               />
               <NameValueRow
-                name="Participant"
+                name="Local Participant"
                 value={localParticipant.identity}
               />
             </div>
@@ -254,22 +259,40 @@ export default function Playground({
               }
             />
             <NameValueRow
-              name="Agent connected"
-              value={
-                voiceAssistant.agent ? (
-                  "TRUE"
-                ) : roomState === ConnectionState.Connected ? (
-                  <LoadingSVG diameter={12} strokeWidth={2} />
-                ) : (
-                  "FALSE"
-                )
-              }
+              name="Agents connected"
+              value={agentCount.toString()}
               valueColor={
-                voiceAssistant.agent
+                agentCount > 0
                   ? `${config.settings.theme_color}-500`
                   : "gray-500"
               }
             />
+            {voiceAssistants.map((assistant) => (
+              <div key={assistant.id} className="flex flex-col gap-2">
+                <NameValueRow
+                  name={assistant.name}
+                  value={assistant.state.toUpperCase()}
+                  valueColor={
+                    assistant.color ||
+                    (assistant.state !== 'disconnected'
+                      ? `${config.settings.theme_color}-500`
+                      : "gray-500")
+                  }
+                  audioTrack={assistant.audioTrack}
+                  agentState={assistant.state}
+                />
+                {assistant.agent && (
+                  <div className="pl-4">
+                    <div className="text-sm text-gray-500 mb-2">Agent Color</div>
+                    <ColorPicker
+                      colors={themeColors}
+                      selectedColor={assistant.color?.replace('-500', '') ?? config.settings.theme_color}
+                      onSelect={(color) => updateAgentColor(assistant.agent!, color)}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         </ConfigurationPanelItem>
         {localVideoTrack && (
@@ -293,19 +316,17 @@ export default function Playground({
             <AudioInputTile trackRef={localMicTrack} />
           </ConfigurationPanelItem>
         )}
-        <div className="w-full">
-          <ConfigurationPanelItem title="Color">
-            <ColorPicker
-              colors={themeColors}
-              selectedColor={config.settings.theme_color}
-              onSelect={(color) => {
-                const userSettings = { ...config.settings };
-                userSettings.theme_color = color;
-                setUserSettings(userSettings);
-              }}
-            />
-          </ConfigurationPanelItem>
-        </div>
+        <ConfigurationPanelItem title="UI Theme">
+          <ColorPicker
+            colors={themeColors}
+            selectedColor={config.settings.theme_color}
+            onSelect={(color) => {
+              const userSettings = { ...config.settings };
+              userSettings.theme_color = color;
+              setUserSettings(userSettings);
+            }}
+          />
+        </ConfigurationPanelItem>
         {config.show_qr && (
           <div className="w-full">
             <ConfigurationPanelItem title="QR Code">
@@ -326,7 +347,8 @@ export default function Playground({
     localMicTrack,
     themeColors,
     setUserSettings,
-    voiceAssistant.agent,
+    voiceAssistants,
+    agentCount
   ]);
 
   let mobileTabs: PlaygroundTab[] = [];
@@ -392,9 +414,12 @@ export default function Playground({
           onConnect(roomState === ConnectionState.Disconnected)
         }
       />
-      <div
-        className={`flex gap-4 py-4 grow w-full selection:bg-${config.settings.theme_color}-900`}
-        style={{ height: `calc(100% - ${headerHeight}px)` }}
+      <div 
+        className="flex gap-4 py-4 grow w-full"
+        style={{ 
+          height: `calc(100% - ${headerHeight}px)`,
+          '--theme-color': config.settings.theme_color
+        } as React.CSSProperties}
       >
         <div className="flex flex-col grow basis-1/2 gap-4 h-full lg:hidden">
           <PlaygroundTabbedTile
@@ -404,11 +429,10 @@ export default function Playground({
           />
         </div>
         <div
-          className={`flex-col grow basis-1/2 gap-4 h-full hidden lg:${
-            !config.settings.outputs.audio && !config.settings.outputs.video
-              ? "hidden"
-              : "flex"
-          }`}
+          className="flex-col grow basis-1/2 gap-4 h-full hidden lg:flex"
+          style={{
+            display: !config.settings.outputs.audio && !config.settings.outputs.video ? 'none' : undefined
+          }}
         >
           {config.settings.outputs.video && (
             <PlaygroundTile
